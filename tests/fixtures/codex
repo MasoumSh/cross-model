@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# Stub `codex` for tests. Behavior selected by $FAKE_CODEX_MODE.
+mode="${FAKE_CODEX_MODE:-ok}"
+
+if [ "${1:-}" = "login" ]; then
+  if [ "$mode" = "logged-out" ]; then
+    echo "Not logged in. Run codex login."
+  else
+    echo "Logged in using ChatGPT"
+  fi
+  exit 0
+fi
+
+# Record argv if requested (for test verification of flag passing)
+if [ -n "${CODEX_ARGV_LOG:-}" ]; then
+  # Write each arg on a separate line for easy grep/assertion
+  {
+    printf '%s\n' "$@"
+  } >> "$CODEX_ARGV_LOG"
+fi
+
+# Plain `codex exec` (the PLAN path) takes its prompt as a positional. clap
+# parses any token starting with `-` as a flag until `--` terminates option
+# parsing, so a brief whose first character is `-` — e.g. the markdown bullet
+# list the crossplan skill's own brief template produces — dies with
+#   error: unexpected argument '- ' found
+# (confirmed live). Model that here, otherwise the fixture accepts a brief the
+# real CLI rejects and the `--` separator in cmd_plan is untested.
+if [ "${1:-}" = "exec" ] && [ "${2:-}" != "review" ]; then
+  seen_ddash=0
+  for arg in "$@"; do
+    [ "$seen_ddash" = "1" ] && continue
+    case "$arg" in
+      --) seen_ddash=1 ;;
+      -s|--sandbox|-C|--cd|-o|--output-last-message|-c|--config|-m|--model|\
+      -i|--image|-p|--profile|--add-dir|--color|--output-schema|--enable|\
+      --disable|--ephemeral|--json|--skip-git-repo-check|--strict-config|\
+      --full-auto|--oss|-h|--help|-V|--version|--dangerously-*)
+        ;; # accepted by exec
+      -*)
+        echo "error: unexpected argument '$arg' found" >&2
+        exit 2
+        ;;
+      *) ;; # positional / flag value
+    esac
+  done
+fi
+
+# `codex exec review` accepts a strictly smaller flag set than plain
+# `codex exec` (no -s/--sandbox, no -C/--cd, no --add-dir, --color, --image,
+# --profile, --oss, --local-provider, --approve-for-me, --version — all of
+# those are `exec`-only). Two live-only defects (-s, then -C) got through
+# the old stub because it tolerated any flag. Enumerate review's actual
+# accepted set instead and reject anything else the same way the real CLI
+# does, so this class of bug can't hide behind the fixture again.
+if [ "${1:-}" = "exec" ] && [ "${2:-}" = "review" ]; then
+  for arg in "$@"; do
+    case "$arg" in
+      -c|--config|-m|--model|-o|--output-last-message|-h|--base|--commit|\
+      --ephemeral|--enable|--disable|--json|--output-schema|\
+      --skip-git-repo-check|--strict-config|--thread-source|--title|\
+      --uncommitted|--worktree|--dangerously-*)
+        ;; # accepted by review
+      -*)
+        echo "error: unexpected argument '$arg' found" >&2
+        exit 2
+        ;;
+      *) ;; # positional / flag value, not a flag
+    esac
+  done
+fi
+
+# `codex exec review`'s positional [PROMPT] cannot be combined with any of
+# the three target flags — confirmed live:
+#   error: the argument '--uncommitted' cannot be used with '[PROMPT]'
+# (same shape for --base/--commit). This is a conflict between two
+# individually-valid arguments, so the accepted-flag-set guard above (which
+# only checks each token in isolation) can't catch it. Walk argv tracking
+# which target flag (if any) was given and whether a bare positional
+# (the prompt) shows up once all recognized flags/values are accounted for.
+# Do NOT `shift` here — "$@" is still needed below to locate -o's value.
+if [ "${1:-}" = "exec" ] && [ "${2:-}" = "review" ]; then
+  target_flag=""
+  prompt_seen=""
+  expect_value=0
+  for arg in "$@"; do
+    if [ "$expect_value" = "1" ]; then
+      expect_value=0
+      continue
+    fi
+    case "$arg" in
+      exec|review) ;;
+      -c|--config|-m|--model|-o|--output-last-message|--title|\
+      --thread-source|--output-schema|--enable|--disable)
+        # --enable/--disable take a feature name. The runner never passes
+        # them; they are listed so the fixture's accepted set matches what
+        # `codex exec review --help` actually advertises, rather than being
+        # narrower than the real CLI and failing closed on a valid flag.
+        expect_value=1
+        ;;
+      --base|--commit)
+        target_flag="$arg"
+        expect_value=1
+        ;;
+      --uncommitted)
+        target_flag="$arg"
+        ;;
+      -h|--ephemeral|--json|--skip-git-repo-check|--strict-config|\
+      --worktree|--dangerously-*)
+        ;;
+      -*) ;; # unknown flag: already rejected by the guard above
+      *)
+        prompt_seen="$arg"
+        ;;
+    esac
+  done
+  if [ -n "$target_flag" ] && [ -n "$prompt_seen" ]; then
+    echo "error: the argument '$target_flag' cannot be used with '[PROMPT]'" >&2
+    exit 2
+  fi
+fi
+
+# Locate the -o / --output-last-message target so we can honour it.
+out=""
+prev=""
+for arg in "$@"; do
+  case "$prev" in
+    -o|--output-last-message) out="$arg" ;;
+  esac
+  prev="$arg"
+done
+
+case "$mode" in
+  slow)  sleep 30; exit 0 ;;
+  fail)  echo "codex: simulated failure" >&2; exit 1 ;;
+  empty) [ -n "$out" ] && : > "$out"; exit 0 ;;
+  *)     [ -n "$out" ] && echo "FAKE PLAN OUTPUT" > "$out"; exit 0 ;;
+esac
