@@ -28,7 +28,9 @@ cd cross-model
 ./install.sh
 ```
 
-This copies `codex-run.sh` to `~/.claude/cross-model/` and the three skills to `~/.claude/skills/`. Restart Claude Code, then type `/crossarch`, `/crossplan` or `/crossreview`.
+This copies `codex-run.sh` to `~/.claude/cross-model/` and the three skills to `~/.claude/skills/`. Restart Claude Code, then type `/crossarch`, `/crossplan` or `/crossreview`. Run `git pull && ./install.sh` to update.
+
+If you're working on the skills, use `./install.sh --link` instead. It symlinks the install to your checkout, so your edits take effect without reinstalling.
 
 Codex uses whatever model and reasoning effort are set in `~/.codex/config.toml`.
 
