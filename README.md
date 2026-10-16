@@ -1,5 +1,9 @@
 # cross-model
 
+> **About this fork.** Forked from [nimaloo/cross-model](https://github.com/nimaloo/cross-model). It adds:
+> - **Windows support (Git Bash):** fixes a runner hang on stdin, a lost-signal hang in the timeout watchdog, and a `mktemp` incompatibility that mislabelled timeouts.
+> - **Grok as an optional reviewer** for `/crossreview`: pick Codex, Grok, or both with `--with`. See [Grok reviewer](#grok-reviewer-optional).
+
 Claude Code skills that bring in OpenAI Codex as an independent second opinion.
 
 - **`/crossarch`**: architecture review of a whole codebase or site. Both models review blind, then every finding is checked against the code and sorted into found-by-both, Codex-only, Claude-only and rejected.
@@ -18,7 +22,7 @@ A second model only helps if it stays independent. If Codex sees Claude's plan o
 
 - [Claude Code](https://claude.com/claude-code)
 - [Codex CLI](https://github.com/openai/codex) on `PATH` and signed in (`codex login`). A ChatGPT plan works; no API key is needed.
-- bash 3.2 or later (the version macOS ships works)
+- bash 3.2 or later (the version macOS ships works; on Windows, Git Bash)
 
 ## Install
 
@@ -45,11 +49,24 @@ Codex uses whatever model and reasoning effort are set in `~/.codex/config.toml`
 /crossreview                     # uncommitted changes
 /crossreview against main        # branch diff
 /crossreview --fix               # apply confirmed findings (never commits)
+/crossreview --with grok         # Grok instead of Codex
+/crossreview --with codex,grok   # both, blind to each other
 ```
+
+## Grok reviewer (optional)
+
+`/crossreview --with grok` (or `--with codex,grok`) adds xAI's Grok as a reviewer.
+
+- **How it stays read-only:** Grok is called through xAI's API with the diff as plain text (15 lines of context) and no tools or file access, so it cannot write anything. xAI's own CLI has no sandbox on Windows, which is why this backend does not use it.
+- **Setup:** Node.js 18+ on `PATH`, and an API key from [console.x.ai](https://console.x.ai) in the `XAI_API_KEY` environment variable.
+- **Cost:** unlike Codex on a ChatGPT plan, Grok is billed per token. Every report ends with the run's token count and an approximate price. Diffs over 200 KB are refused rather than sent.
+- **Settings:** `CROSS_MODEL_GROK_MODEL` (default `grok-4.7`), `CROSS_MODEL_GROK_MAX_BYTES` (default `200000`), `CROSS_MODEL_GROK_PRICE_IN` / `_OUT` (USD per 1M tokens, defaults `2` / `6`, used only for the estimate).
+
+Grok uses the same exit codes as the Codex runner: 10 Node.js or the script is missing, 11 `XAI_API_KEY` is missing or rejected, 12 timeout, 13 API error or diff over the cap, 14 no output.
 
 ## Runner exit codes
 
-The skills read these exit codes from `codex-run.sh {preflight|plan|arch|review}`:
+The skills read these exit codes from `codex-run.sh {preflight|plan|arch|review|grok-review}`:
 
 | Code | Meaning |
 |---|---|

@@ -345,5 +345,31 @@ else
 fi
 
 echo
+echo "grok-review:"
+# Every case below fails before grok-review.mjs reaches the network, so the
+# suite never spends xAI credits. The live run is recorded in tests/smoke.md.
+G="$TMP/grepo"; mkdir -p "$G"
+git -C "$G" init -q
+printf 'a\n' > "$G/f.txt"
+git -C "$G" add f.txt
+git -C "$G" -c user.name=t -c user.email=t@t commit -qm init
+XAI_API_KEY=dummy assert_exit 64 "exit 64 when the diff is empty" \
+  "$RUNNER" grok-review --out "$TMP/g1.txt" --repo "$G"
+printf 'a\nb\n' > "$G/f.txt"
+XAI_API_KEY= assert_exit 11 "exit 11 when XAI_API_KEY is unset" \
+  "$RUNNER" grok-review --out "$TMP/g2.txt" --repo "$G"
+XAI_API_KEY=dummy CROSS_MODEL_GROK_MAX_BYTES=10 assert_exit 13 "exit 13 when the diff is over the cost cap" \
+  "$RUNNER" grok-review --out "$TMP/g3.txt" --repo "$G"
+XAI_API_KEY=dummy assert_exit 64 "exit 64 on a malformed --target" \
+  "$RUNNER" grok-review --out "$TMP/g4.txt" --repo "$G" --target nonsense
+XAI_API_KEY=dummy assert_exit 13 "exit 13 when the base branch does not exist" \
+  "$RUNNER" grok-review --out "$TMP/g5.txt" --repo "$G" --target base:no-such-branch
+if grep -q '"Authorization"\|XAI_API_KEY' "$TMP"/*.txt 2>/dev/null; then
+  echo "  FAIL API key never written to output files"; FAIL=$((FAIL+1))
+else
+  echo "  ok   API key never written to output files"; PASS=$((PASS+1))
+fi
+
+echo
 echo "passed: $PASS  failed: $FAIL"
 [ "$FAIL" -eq 0 ]

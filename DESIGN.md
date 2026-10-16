@@ -265,6 +265,26 @@ passed.
 6. **Degraded paths are loud.** Simulate each failure row above; confirm the
    final response states the cross-check did not happen.
 
+## Fork additions (Windows support, Grok backend)
+
+### Windows (Git Bash) constraints, verified 2026-10-16 on codex-cli 0.163.0
+
+| # | Constraint | Consequence |
+|---|---|---|
+| W1 | With `set -m`, a backgrounded command keeps the caller's stdin. `codex exec` then prints "Reading additional input from stdin..." and blocks until the watchdog fires. | `run_with_timeout` starts the command with `< /dev/null`. |
+| W2 | GNU `mktemp` (Git Bash) rejects `mktemp -t crossmodel` ("too few X's"). The sentinel path came back empty, so a timeout surfaced as exit 13 instead of 12. | Explicit template: `mktemp "${TMPDIR:-/tmp}/crossmodel.XXXXXX"`. |
+| W3 | A TERM sent to the watchdog subshell can be lost when it lands mid-fork. A single `sleep $secs` then held the caller in `wait` for the full timeout whenever the command finished almost instantly (the stubbed suite hung). | The watchdog sleeps in 1-second steps and exits as soon as the command is gone, so a lost signal costs at most a second. |
+
+### Grok backend for `/crossreview`
+
+| Decision | Rationale |
+|---|---|
+| Call xAI's Responses API, not xAI's Grok Build CLI. | Grok Build's read-only sandbox uses Landlock (Linux) and Seatbelt (macOS); there is none on Windows. An API call with no tools cannot touch the filesystem at all, so the read-only guarantee holds by construction. |
+| Send the diff with 15 lines of context. | Grok cannot open files, so it gets more surrounding code than git's default 3 lines. Its findings about code outside the diff are treated as guesses until Claude checks them. |
+| Same targets, output format and exit-code contract as `review`. | The skill parses one finding format and one exit-code table for both reviewers. `parse_review_args` is shared so both validate arguments identically. |
+| 200 KB diff cap and a per-run cost line. | Grok bills per token, unlike Codex on a ChatGPT plan; an accidental whole-repo diff must not become a surprise bill. |
+| Node.js for the HTTP call. | No `jq` dependency for JSON, built-in `fetch` and timeouts. |
+
 ## Limitations
 
 - **Interactive sessions only.** The Claude half is a human-invoked Claude

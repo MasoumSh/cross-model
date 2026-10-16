@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Installs the cross-model skills into Claude Code.
 #   ~/.claude/cross-model/codex-run.sh   the runner (the skills call it at this path)
+#   ~/.claude/cross-model/grok-review.mjs  the optional Grok backend the runner calls
 #   ~/.claude/skills/<name>/SKILL.md     the skills
 #
 # Usage: ./install.sh          copy the files (stable install)
@@ -39,6 +40,7 @@ else
   [ -L "$CLAUDE_DIR/cross-model" ] && rm "$CLAUDE_DIR/cross-model"
   mkdir -p "$CLAUDE_DIR/cross-model"
   install -m 755 "$HERE/codex-run.sh" "$CLAUDE_DIR/cross-model/codex-run.sh"
+  install -m 644 "$HERE/grok-review.mjs" "$CLAUDE_DIR/cross-model/grok-review.mjs"
 fi
 
 for skill in crossarch crossplan crossreview; do

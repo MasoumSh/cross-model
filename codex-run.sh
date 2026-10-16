@@ -38,10 +38,17 @@ run_with_timeout() {
   set +m
 
   (
-    sleep "$secs" &
-    local sleep_pid=$!
-    trap "kill -TERM $sleep_pid 2>/dev/null; wait $sleep_pid 2>/dev/null; exit 0" TERM
-    wait "$sleep_pid" 2>/dev/null
+    # Sleep in 1s steps and leave as soon as the command is gone. On Git Bash
+    # a TERM that lands while this subshell is forking can be lost, and a
+    # single `sleep $secs` then held the caller in `wait` for the full timeout.
+    local waited=0 sp=""
+    trap 'kill -TERM $sp 2>/dev/null; exit 0' TERM
+    while [ "$waited" -lt "$secs" ]; do
+      kill -0 "$cmd_pid" 2>/dev/null || exit 0
+      sleep 1 & sp=$!
+      wait "$sp" 2>/dev/null
+      waited=$((waited + 1))
+    done
     if kill -0 -"$cmd_pid" 2>/dev/null || kill -0 "$cmd_pid" 2>/dev/null; then
       : > "$sentinel"
       kill -TERM -"$cmd_pid" 2>/dev/null || kill -TERM "$cmd_pid" 2>/dev/null
@@ -143,8 +150,12 @@ cmd_plan() {
   return 0
 }
 
-cmd_review() {
-  local out="" repo="$PWD" secs="$DEFAULT_TIMEOUT" target="uncommitted"
+# Shared by review and grok-review. Assigns the CALLER's locals
+# out/repo/secs/target_flag/target_val (bash dynamic scope), so both backends
+# validate --out/--repo/--target/--timeout identically.
+parse_review_args() {
+  local target="uncommitted"
+  out=""; repo="$PWD"; secs="$DEFAULT_TIMEOUT"
   while [ $# -gt 0 ]; do
     case "$1" in
       --out)
@@ -170,7 +181,7 @@ cmd_review() {
   [ -n "$out" ] || die "--out <file> is required" $EXIT_USAGE
 
   # Validate target format and extract flag and value
-  local target_flag="" target_val=""
+  target_flag=""; target_val=""
   case "$target" in
     uncommitted) target_flag="--uncommitted" ;;
     base:*)      target_flag="--base";   target_val="${target#base:}" ;;
@@ -204,6 +215,11 @@ cmd_review() {
   # Validate repo directory exists (cmd_review cds into it — see below —
   # since `codex exec review` has no -C/--cd of its own).
   [ -d "$repo" ] || die "--repo is not a directory: $repo" $EXIT_USAGE
+}
+
+cmd_review() {
+  local out repo secs target_flag target_val
+  parse_review_args "$@"
 
   preflight
 
@@ -253,8 +269,56 @@ cmd_review() {
   return 0
 }
 
+# grok-review: the same diff targets as review, reviewed by xAI's Grok through
+# its API. Grok receives the diff as text and has no file or tool access, so it
+# cannot write to the repo. Exit codes reuse the contract: 10 node or the
+# script missing, 11 XAI_API_KEY missing or rejected, 12 timeout, 13 API error
+# or diff over the cost cap, 14 no output, 64 bad arguments.
+cmd_grok_review() {
+  local out repo secs target_flag target_val
+  parse_review_args "$@"
+
+  command -v node >/dev/null 2>&1 \
+    || die "node not found on PATH (the Grok backend needs Node.js 18+)" $EXIT_NO_CODEX
+  local here; here="$(cd "$(dirname "$0")" && pwd)"
+  [ -f "$here/grok-review.mjs" ] \
+    || die "grok-review.mjs is missing next to codex-run.sh (re-run install.sh)" $EXIT_NO_CODEX
+  [ -n "${XAI_API_KEY:-}" ] \
+    || die "XAI_API_KEY is not set (create a key at console.x.ai)" $EXIT_NO_LOGIN
+
+  # Grok cannot open files, so it gets 15 lines of context instead of git's
+  # default 3. The three targets match what `codex exec review` sees.
+  local diff_file; diff_file="$(mktemp "${TMPDIR:-/tmp}/crossmodel-diff.XXXXXX")"
+  local git_status=0
+  case "$target_flag" in
+    --uncommitted) git -C "$repo" diff -U15 HEAD > "$diff_file" || git_status=$? ;;
+    --base)        git -C "$repo" diff -U15 "$target_val"...HEAD > "$diff_file" || git_status=$? ;;
+    --commit)      git -C "$repo" show -U15 --format= "$target_val" > "$diff_file" || git_status=$? ;;
+  esac
+  if [ "$git_status" -ne 0 ]; then
+    rm -f "$diff_file"
+    die "git could not produce the diff for this target" $EXIT_CODEX_FAIL
+  fi
+
+  # grok-review.mjs enforces --timeout itself; the watchdog is a backstop.
+  local status=0
+  run_with_timeout "$((secs + 15))" node "$here/grok-review.mjs" \
+    --diff "$diff_file" --out "$out" --timeout "$secs" || status=$?
+  rm -f "$diff_file"
+
+  case "$status" in
+    0) ;;
+    12) die "grok timed out after ${secs}s" $EXIT_TIMEOUT ;;
+    11|13|14|64) exit "$status" ;;  # grok-review.mjs already printed why
+    *) die "grok backend exited with status $status" $EXIT_CODEX_FAIL ;;
+  esac
+  [ -s "$out" ] || die "grok produced no output" $EXIT_NO_OUTPUT
+  return 0
+}
+
 case "${1:-}" in
   preflight) shift; preflight ;;
+  grok-review) shift; cmd_grok_review "$@" ;;
   plan) shift; cmd_plan "$@" ;;
   # arch: whole-codebase architecture review (crossarch skill). `codex exec
   # review` only reviews a diff, so this is plain `codex exec` with a prompt,
@@ -279,5 +343,5 @@ case "${1:-}" in
     run_with_timeout "${1:-5}" codex exec -s read-only --ephemeral -o /dev/null -- "selftest"
     exit $?
     ;;
-  *) die "usage: codex-run.sh {preflight|plan|arch|review} [options]" $EXIT_USAGE ;;
+  *) die "usage: codex-run.sh {preflight|plan|arch|review|grok-review} [options]" $EXIT_USAGE ;;
 esac
