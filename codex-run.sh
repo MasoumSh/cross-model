@@ -26,11 +26,14 @@ preflight() {
 # watchdog kill (143) apart from the command exiting 143 by itself.
 run_with_timeout() {
   local secs="$1"; shift
-  local sentinel; sentinel="$(mktemp -t crossmodel)"
+  # Explicit XXXXXX template: GNU mktemp (Git Bash on Windows) rejects `-t crossmodel`.
+  local sentinel; sentinel="$(mktemp "${TMPDIR:-/tmp}/crossmodel.XXXXXX")"
   rm -f "$sentinel"
 
   set -m
-  "$@" &
+  # With job control on, a background job keeps the caller's stdin; codex then
+  # blocks on "Reading additional input from stdin..." until the watchdog fires.
+  "$@" < /dev/null &
   local cmd_pid=$!
   set +m
 
